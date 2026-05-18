@@ -6,6 +6,8 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 ## Workspace Context
 
+`vision.md` contains the overall vision of the game currently being worked on in the session.
+
 This local repository **is** the Roblox project source. Rojo (`rojo serve`) syncs the on-disk files into Roblox Studio in real time, so editing a file here is editing the game. Make all changes to files in this repo.
 
 The Roblox MCP bridge is **not** the default editing path. Reserve Roblox MCP tool calls for cases where the engineer explicitly asks for them — for example, inspecting live workspace state, reading runtime values, or performing actions that cannot be expressed as a source-file change. Do not use the MCP to make routine code edits.

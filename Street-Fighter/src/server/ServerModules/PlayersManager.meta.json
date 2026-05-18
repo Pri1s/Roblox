@@ -1,0 +1,9 @@
+{
+  "properties": {
+    "Attributes": {
+      "Priority": {
+        "Float64": 10
+      }
+    }
+  }
+}
