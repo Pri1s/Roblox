@@ -1,0 +1,10 @@
+[package]
+name = "aot/game"
+version = "0.1.0"
+registry = "https://github.com/upliftgames/wally-index"
+realm = "shared"
+private = true
+
+[dependencies]
+
+[server-dependencies]

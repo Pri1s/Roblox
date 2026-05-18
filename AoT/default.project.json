@@ -1,0 +1,36 @@
+{
+  "name": "AoT",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Modules": {
+        "$className": "Folder",
+        "Client": {
+          "$path": "src/client"
+        },
+        "Shared": {
+          "$path": "src/shared"
+        }
+      }
+    },
+
+    "ServerScriptService": {
+      "ServerModules": {
+        "$path": "src/server"
+      },
+      "loader.server.lua": {
+        "$path": "src/loaders/server/loader.server.lua"
+      }
+    },
+
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "Starter.client.lua": {
+          "$path": "src/loaders/client/Starter.client.lua"
+        }
+      }
+    }
+  }
+}

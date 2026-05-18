@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+# Rojo-generated metadata
+sourcemap.json
+
+# Wally install outputs
+Packages/*
+ServerPackages/*
