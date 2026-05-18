@@ -6,9 +6,9 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 ## Workspace Context
 
-The actual Roblox project lives on the other side of the Roblox MCP bridge. This local directory contains only supporting artifacts such as markdown files, documentation, and related notes.
+This local repository **is** the Roblox project source. Rojo (`rojo serve`) syncs the on-disk files into Roblox Studio in real time, so editing a file here is editing the game. Make all changes to files in this repo.
 
-When working on the Roblox experience itself, inspect and modify the live project through the Roblox MCP bridge rather than assuming the game source exists in this local filesystem.
+The Roblox MCP bridge is **not** the default editing path. Reserve Roblox MCP tool calls for cases where the engineer explicitly asks for them — for example, inspecting live workspace state, reading runtime values, or performing actions that cannot be expressed as a source-file change. Do not use the MCP to make routine code edits.
 
 The engineer can run playtests and validate Roblox code directly. Agents do not need to perform playtesting or in-Studio validation unless explicitly asked.
 

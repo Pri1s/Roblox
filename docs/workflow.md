@@ -4,32 +4,48 @@
 
 ---
 
+## How Changes Are Made
+
+All code changes are made to **files in this local repository**. Rojo (`rojo serve`) syncs the repo into Roblox Studio in real time, so an on-disk edit is a live edit to the game.
+
+- Edit files in `src/` directly. Do not use the Roblox MCP for routine code changes.
+- The Roblox MCP is reserved for cases the engineer explicitly requests — typically inspecting live workspace state or performing runtime actions that cannot be expressed as a source-file change.
+- The engineer handles starting/stopping `rojo serve` and running playtests. Do not assume an agent action is needed for sync.
+
+---
+
 ## Project Structure
 
-This project uses a module-based architecture. Before writing any code, understand where things live:
+This project uses Rojo's default layout. The on-disk `src/` folders map into Roblox services as follows:
 
 ```
-ServerScriptService/
-├── ServerModules/          ← Server-only ModuleScripts
-│   └── Services/           ← Server services
-└── loader.server.lua       ← Server loader (do not modify unless changing load behavior)
-
-ReplicatedStorage/
-├── Modules/
-│   ├── Client/             ← Client-only ModuleScripts
-│   │   └── Services/       ← Client services
-│   ├── Shared/             ← ModuleScripts used by both server and client
-│   │   ├── Services/       ← Shared services
-│   │   └── Behaviors/      ← Behaviors reused across multiple services
-│   └── Utility/            ← Stateless helpers, no Init/Start needed
-├── Networking/             ← All RemoteEvents and RemoteFunctions
-└── Assets/                 ← Models, sounds, effects, animations
-
-StarterPlayerScripts/
-└── Starter.client.lua      ← Client loader (do not modify unless changing load behavior)
+src/
+├── server/                 → ServerScriptService
+│   ├── ServerModules/      ← Server-only ModuleScripts
+│   │   └── Services/       ← Server services
+│   └── loader.server.lua   ← Server loader (do not modify unless changing load behavior)
+├── client/                 → StarterPlayer.StarterPlayerScripts
+│   └── Starter.client.lua  ← Client loader (do not modify unless changing load behavior)
+└── shared/                 → ReplicatedStorage
+    ├── Modules/
+    │   ├── Client/         ← Client-only ModuleScripts
+    │   │   └── Services/   ← Client services
+    │   ├── Shared/         ← ModuleScripts used by both server and client
+    │   │   ├── Services/   ← Shared services
+    │   │   └── Behaviors/  ← Behaviors reused across multiple services
+    │   └── Utility/        ← Stateless helpers, no Init/Start needed
+    ├── Networking/         ← All RemoteEvents and RemoteFunctions
+    └── Assets/             ← Models, sounds, effects, animations
 ```
 
 When adding any new script, answer this first: **who runs it — server, client, or both?** That answer determines the folder. Do not place scripts anywhere outside this structure.
+
+**File naming under Rojo:**
+
+- `.lua` → ModuleScript (e.g. `DataService.lua`)
+- `.server.lua` → Script (server)
+- `.client.lua` → LocalScript (client)
+- `init.lua` inside a folder → the folder becomes a ModuleScript with children
 
 ---
 

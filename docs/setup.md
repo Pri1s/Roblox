@@ -1,35 +1,57 @@
 # Roblox Project Setup Guide
 
-> This document instructs an AI agent on how to scaffold a new Roblox game project using a module-based architecture with a clean, predictable folder structure. Follow every step precisely before writing any game logic.
+> This document instructs an AI agent on how to scaffold a new Roblox game project using Rojo and a module-based architecture with a clean, predictable folder structure. Follow every step precisely before writing any game logic.
 
 ---
 
 ## Philosophy
 
-All game logic lives in **ModuleScripts**. Plain Scripts and LocalScripts are only used as thin loaders — they do not contain logic themselves. Every module is placed based on a single question:
+All game logic lives in **ModuleScripts**, authored as files in this repository and synced into Roblox Studio by Rojo. Plain Scripts and LocalScripts are only used as thin loaders — they do not contain logic themselves. Every module is placed based on a single question:
 
 > **Who runs this code — the server, the client, or both?**
 
-This determines exactly where the module lives.
+This determines exactly where the module lives on disk, which in turn determines where it ends up in Studio.
 
 ---
 
-## Step 1 — Build the Folder Structure
+## Step 1 — Initialize the Rojo Project
 
-Create the following folders in the Roblox Explorer. Do not deviate from this layout.
-
-### ServerScriptService
+The engineer runs these commands from the repo root:
 
 ```
-ServerScriptService/
+rojo init
+rojo serve
+```
+
+`rojo init` creates a starter `default.project.json` and a `src/` directory with the standard `src/server`, `src/client`, and `src/shared` subfolders. `rojo serve` starts the sync server; the engineer then connects to it from the Rojo plugin inside Studio. After that, every file edit in this repo replicates live into Studio.
+
+Agents should not run `rojo init` or `rojo serve` unless explicitly asked. Assume the engineer has done this before any agent work begins.
+
+---
+
+## Step 2 — Build the Folder Structure
+
+Inside `src/`, expand the default Rojo layout to the following. Do not deviate.
+
+### `src/server/` → `ServerScriptService`
+
+```
+src/server/
 ├── ServerModules/          ← ModuleScripts run only by the server
-└── loader.server.lua       ← Server loader script (see Step 3)
+└── loader.server.lua       ← Server loader script (see Step 4)
 ```
 
-### ReplicatedStorage
+### `src/client/` → `StarterPlayer.StarterPlayerScripts`
 
 ```
-ReplicatedStorage/
+src/client/
+└── Starter.client.lua      ← Client loader script (see Step 4)
+```
+
+### `src/shared/` → `ReplicatedStorage`
+
+```
+src/shared/
 ├── Modules/
 │   ├── Client/             ← ModuleScripts run only by the client
 │   ├── Shared/             ← ModuleScripts accessed by both server and client
@@ -38,16 +60,18 @@ ReplicatedStorage/
 └── Assets/                 ← Models, effects, sounds, animations (organized into subfolders by category)
 ```
 
-### StarterPlayerScripts
+**Rojo file naming reminder:**
 
-```
-StarterPlayerScripts/
-└── Starter.client.lua      ← Client loader script (see Step 3)
-```
+- `.lua` → ModuleScript
+- `.server.lua` → Script (server)
+- `.client.lua` → LocalScript (client)
+- A folder containing `init.lua` becomes a ModuleScript with children. Use this if a module needs nested child instances.
+
+For folders that contain only ModuleScripts and no script of their own (e.g. `ServerModules/`, `Modules/Shared/`), Rojo represents them as plain Folder instances. No special file is needed.
 
 ---
 
-## Step 2 — Module Script Conventions
+## Step 3 — Module Script Conventions
 
 Every ModuleScript that needs to run on game start must expose exactly two functions:
 
@@ -84,9 +108,9 @@ Two options are available:
 
 ---
 
-## Step 3 — Write the Module Loaders
+## Step 4 — Write the Module Loaders
 
-### Server Loader (`ServerScriptService/loader.server.lua`)
+### Server Loader (`src/server/loader.server.lua`)
 
 ```lua
 -- Collects all modules from ServerModules and Shared,
@@ -139,7 +163,7 @@ for _, mod in ipairs(loaded) do
 end
 ```
 
-### Client Loader (`StarterPlayerScripts/Starter.client.lua`)
+### Client Loader (`src/client/Starter.client.lua`)
 
 ```lua
 -- Waits for the server to signal that all server modules have finished loading,
@@ -198,11 +222,11 @@ end
 
 ---
 
-## Step 4 — Create the Players Manager Module
+## Step 5 — Create the Players Manager Module
 
 This is a **server module** and must be the last server module to load. Set its `Priority` attribute to `10` (or the highest number among all server modules).
 
-Place it at: `ServerScriptService/ServerModules/PlayersManager`
+Place it at: `src/server/ServerModules/PlayersManager.lua`
 
 ```lua
 local PlayersManager = {}
@@ -246,9 +270,11 @@ end
 return PlayersManager
 ```
 
+Rojo cannot set instance attributes from the filesystem alone. The engineer sets the `Priority` attribute on the synced `ModuleScript` once in Studio: select the ModuleScript → Add Attribute → name it `Priority`, type `number`. The attribute persists in the place file.
+
 ---
 
-## Step 5 — Set Module Priorities
+## Step 6 — Set Module Priorities
 
 Each ModuleScript can have a `Priority` attribute (integer). Lower numbers load first.
 
@@ -259,13 +285,13 @@ Each ModuleScript can have a `Priority` attribute (integer). Lower numbers load 
 | `5–9`    | Feature systems                                                         |
 | `10`     | `PlayersManager` — always last on the server                            |
 
-To set a priority in Studio: select the ModuleScript → Add Attribute → name it `Priority`, type `number`.
+The engineer sets these in Studio on the synced instance (see note in Step 5).
 
 ---
 
-## Step 6 — Organize Assets
+## Step 7 — Organize Assets
 
-Inside `ReplicatedStorage/Assets/`, create subfolders by category. Example:
+Inside `src/shared/Assets/`, create subfolders by category. Example:
 
 ```
 Assets/
@@ -275,16 +301,18 @@ Assets/
 └── Animations/
 ```
 
-All asset references in code should point here. Never scatter assets across the workspace or other services.
+All asset references in code should point here. Never scatter assets across the workspace or other services. Binary assets (models, audio) typically live in the place file rather than on disk; treat the `Assets/` folder as the canonical location regardless of how individual assets get there.
 
 ---
 
 ## Checklist Before Writing Any Game Logic
 
-- [ ] Folder structure matches Step 1 exactly
-- [ ] Server loader exists in `ServerScriptService`
-- [ ] Client loader exists in `StarterPlayerScripts`
-- [ ] `PlayersManager` module exists with `Priority = 10`
+- [ ] `rojo init` has been run and `default.project.json` exists at repo root
+- [ ] `rojo serve` is running and Studio is connected via the Rojo plugin
+- [ ] Folder structure under `src/` matches Step 2 exactly
+- [ ] Server loader exists at `src/server/loader.server.lua`
+- [ ] Client loader exists at `src/client/Starter.client.lua`
+- [ ] `PlayersManager` module exists with `Priority = 10` set on the synced instance
 - [ ] `ClientReady` RemoteFunction exists inside `ReplicatedStorage/Networking/`
 - [ ] All new modules are placed in the correct folder based on who runs them
 - [ ] All modules that auto-run expose `Init` and `Start`
