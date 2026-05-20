@@ -1,7 +1,9 @@
 local MatchService = {}
 
 -- Public API
+-- MatchService.RegisterArena(arenaId, arenaModel) -> boolean, status
 -- MatchService.QueuePlayer(player, entryData) -> matchId?, status
+-- MatchService.QueuePlayerForArenaSlot(player, arenaId, slotId, referencePart) -> matchId?, status
 -- MatchService.CancelEntry(player) -> boolean
 -- MatchService.CreateDuel(challenger, opponent, entryData) -> matchId?, status
 -- MatchService.BeginFight(matchId) -> boolean, status
@@ -9,6 +11,7 @@ local MatchService = {}
 -- MatchService.EndMatch(matchId, winner, reason) -> boolean, status
 -- MatchService.GetMatch(matchId) -> matchSnapshot?
 -- MatchService.GetMatchForPlayer(player) -> matchSnapshot?
+-- MatchService.GetMatchForArena(arenaId) -> matchSnapshot?
 -- MatchService.IsPlayerInMatch(player) -> boolean
 -- MatchService.GetWaitingPlayers() -> { Player }
 --
@@ -18,6 +21,7 @@ local MatchService = {}
 -- MatchService.MatchEnded fires after exit teardown completes.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local PHASE = {
 	Entry = "Entry",
@@ -33,6 +37,10 @@ local waitingQueue = {}
 local waitingByPlayer = {}
 local matchesById = {}
 local matchIdByPlayer = {}
+local arenaStatesById = {}
+local arenaIdByPlayer = {}
+local arenaSlotByPlayer = {}
+local movementStateByPlayer = {}
 
 MatchService.Phase = PHASE
 MatchService.MatchReady = Instance.new("BindableEvent")
@@ -59,7 +67,7 @@ local function isActivePlayer(player)
 end
 
 local function isPlayerReserved(player)
-	return waitingByPlayer[player] ~= nil or matchIdByPlayer[player] ~= nil
+	return waitingByPlayer[player] ~= nil or matchIdByPlayer[player] ~= nil or arenaIdByPlayer[player] ~= nil
 end
 
 local function getParticipant(match, player)
@@ -89,6 +97,98 @@ local function removeWaitingEntry(player)
 	return true
 end
 
+local function getArenaKey(arenaId)
+	return tostring(arenaId)
+end
+
+local function fireControlsEnabled(player, enabled)
+	if not isActivePlayer(player) then
+		return
+	end
+
+	local networking = ReplicatedStorage:FindFirstChild("Networking")
+	local remote = networking and networking:FindFirstChild("SetControlsEnabled")
+	if remote and remote:IsA("RemoteEvent") then
+		remote:FireClient(player, enabled)
+	end
+end
+
+local function lockPlayerMovement(player)
+	if not movementStateByPlayer[player] then
+		local character = player.Character
+		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			movementStateByPlayer[player] = {
+				WalkSpeed = humanoid.WalkSpeed,
+				JumpPower = humanoid.JumpPower,
+				JumpHeight = humanoid.JumpHeight,
+				AutoRotate = humanoid.AutoRotate,
+			}
+
+			humanoid.WalkSpeed = 0
+			humanoid.JumpPower = 0
+			humanoid.JumpHeight = 0
+			humanoid.AutoRotate = false
+		else
+			movementStateByPlayer[player] = {}
+		end
+	end
+
+	fireControlsEnabled(player, false)
+end
+
+local function restorePlayerMovement(player)
+	local movementState = movementStateByPlayer[player]
+	movementStateByPlayer[player] = nil
+
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid and movementState then
+		if movementState.WalkSpeed then
+			humanoid.WalkSpeed = movementState.WalkSpeed
+		end
+		if movementState.JumpPower then
+			humanoid.JumpPower = movementState.JumpPower
+		end
+		if movementState.JumpHeight then
+			humanoid.JumpHeight = movementState.JumpHeight
+		end
+		if movementState.AutoRotate ~= nil then
+			humanoid.AutoRotate = movementState.AutoRotate
+		end
+	end
+
+	fireControlsEnabled(player, true)
+end
+
+local function teleportPlayerToReference(player, referencePart)
+	local character = player.Character
+	if not character or not referencePart then
+		return
+	end
+
+	character:PivotTo(referencePart.CFrame + Vector3.new(0, 3, 0))
+end
+
+local function removeArenaEntry(player)
+	local arenaId = arenaIdByPlayer[player]
+	local slotId = arenaSlotByPlayer[player]
+	if not arenaId or not slotId then
+		return false
+	end
+
+	local arenaState = arenaStatesById[arenaId]
+	if arenaState and arenaState.QueueSlots[slotId] and arenaState.QueueSlots[slotId].Player == player then
+		arenaState.QueueSlots[slotId] = nil
+	end
+
+	arenaIdByPlayer[player] = nil
+	arenaSlotByPlayer[player] = nil
+	restorePlayerMovement(player)
+
+	return true
+end
+
 local function buildParticipantSnapshot(participant)
 	return {
 		Player = participant.Player,
@@ -110,6 +210,7 @@ local function buildMatchSnapshot(match)
 		Phase = match.Phase,
 		Ready = match.Ready,
 		Source = match.Source,
+		ArenaId = match.ArenaId,
 		Round = match.Round,
 		RoundsToWin = match.RoundsToWin,
 		Participants = participants,
@@ -157,8 +258,8 @@ local function transitionMatch(match, nextPhase)
 end
 
 local function assignArena(match)
-	-- Arena reservation will be added when arena ownership exists.
-	match.Arena = nil
+	local arenaState = match.ArenaId and arenaStatesById[match.ArenaId]
+	match.Arena = arenaState and arenaState.Arena or nil
 end
 
 local function loadCharacterData(match, participant)
@@ -200,12 +301,13 @@ local function runExitTeardown(match, result)
 	-- Arena cleanup, result persistence, and lobby return will be added here.
 end
 
-local function createMatch(participantEntries, source, entryData)
+local function createMatch(participantEntries, source, entryData, arenaId)
 	local match = {
 		Id = getNextMatchId(),
 		Phase = PHASE.Entry,
 		Ready = false,
 		Source = source,
+		ArenaId = arenaId and getArenaKey(arenaId) or nil,
 		Round = 1,
 		RoundsToWin = (entryData and entryData.RoundsToWin) or DEFAULT_ROUNDS_TO_WIN,
 		Participants = {},
@@ -253,6 +355,24 @@ local function tryCreateQueuedMatch(entry)
 	return nil, "WaitingForOpponent"
 end
 
+local function tryCreateArenaMatch(arenaState)
+	local leftEntry = arenaState.QueueSlots["1"]
+	local rightEntry = arenaState.QueueSlots["2"]
+	if not leftEntry or not rightEntry then
+		return nil, "WaitingForOpponent"
+	end
+
+	local matchId, status = createMatch({
+		leftEntry,
+		rightEntry,
+	}, "ArenaQueue", {
+		ArenaId = arenaState.ArenaId,
+	}, arenaState.ArenaId)
+
+	arenaState.MatchId = matchId
+	return matchId, status
+end
+
 local function getDisconnectWinner(match, disconnectingPlayer)
 	for _, participant in ipairs(match.Participants) do
 		if participant.Player ~= disconnectingPlayer and isActivePlayer(participant.Player) then
@@ -279,6 +399,23 @@ local function onPlayerRemoving(player)
 	MatchService.EndMatch(matchId, getDisconnectWinner(match, player), "Disconnect")
 end
 
+function MatchService.RegisterArena(arenaId, arenaModel)
+	local arenaKey = getArenaKey(arenaId)
+	if arenaStatesById[arenaKey] then
+		arenaStatesById[arenaKey].Arena = arenaModel
+		return true, "ArenaAlreadyRegistered"
+	end
+
+	arenaStatesById[arenaKey] = {
+		ArenaId = arenaKey,
+		Arena = arenaModel,
+		QueueSlots = {},
+		MatchId = nil,
+	}
+
+	return true, "ArenaRegistered"
+end
+
 function MatchService.QueuePlayer(player, entryData)
 	if not isActivePlayer(player) then
 		return nil, "InvalidPlayer"
@@ -292,8 +429,50 @@ function MatchService.QueuePlayer(player, entryData)
 	return tryCreateQueuedMatch(entry)
 end
 
+function MatchService.QueuePlayerForArenaSlot(player, arenaId, slotId, referencePart)
+	if not isActivePlayer(player) then
+		return nil, "InvalidPlayer"
+	end
+
+	if isPlayerReserved(player) then
+		return nil, "PlayerUnavailable"
+	end
+
+	local arenaKey = getArenaKey(arenaId)
+	local arenaState = arenaStatesById[arenaKey]
+	if not arenaState then
+		return nil, "ArenaNotRegistered"
+	end
+
+	local slotKey = tostring(slotId)
+	if slotKey ~= "1" and slotKey ~= "2" then
+		return nil, "InvalidSlot"
+	end
+
+	local occupiedEntry = arenaState.QueueSlots[slotKey]
+	if occupiedEntry and isActivePlayer(occupiedEntry.Player) then
+		return nil, "SlotOccupied"
+	end
+
+	arenaState.QueueSlots[slotKey] = {
+		Player = player,
+		EntryData = {
+			ArenaId = arenaKey,
+			SlotId = slotKey,
+		},
+		QueuedAt = os.clock(),
+	}
+	arenaIdByPlayer[player] = arenaKey
+	arenaSlotByPlayer[player] = slotKey
+
+	teleportPlayerToReference(player, referencePart)
+	lockPlayerMovement(player)
+
+	return tryCreateArenaMatch(arenaState)
+end
+
 function MatchService.CancelEntry(player)
-	return removeWaitingEntry(player)
+	return removeWaitingEntry(player) or removeArenaEntry(player)
 end
 
 function MatchService.CreateDuel(challenger, opponent, entryData)
@@ -305,7 +484,7 @@ function MatchService.CreateDuel(challenger, opponent, entryData)
 		return nil, "SamePlayer"
 	end
 
-	if matchIdByPlayer[challenger] or matchIdByPlayer[opponent] then
+	if isPlayerReserved(challenger) or isPlayerReserved(opponent) then
 		return nil, "PlayerUnavailable"
 	end
 
@@ -389,6 +568,17 @@ function MatchService.EndMatch(matchId, winner, reason)
 	runExitTeardown(match, result)
 	MatchService.MatchEnded:Fire(buildMatchSnapshot(match))
 
+	if match.ArenaId then
+		local arenaState = arenaStatesById[match.ArenaId]
+		if arenaState and arenaState.MatchId == match.Id then
+			arenaState.MatchId = nil
+		end
+
+		for _, participant in ipairs(match.Participants) do
+			removeArenaEntry(participant.Player)
+		end
+	end
+
 	releaseMatchPlayers(match)
 	matchesById[match.Id] = nil
 
@@ -413,6 +603,15 @@ function MatchService.GetMatchForPlayer(player)
 	return MatchService.GetMatch(matchId)
 end
 
+function MatchService.GetMatchForArena(arenaId)
+	local arenaState = arenaStatesById[getArenaKey(arenaId)]
+	if not arenaState or not arenaState.MatchId then
+		return nil
+	end
+
+	return MatchService.GetMatch(arenaState.MatchId)
+end
+
 function MatchService.IsPlayerInMatch(player)
 	return matchIdByPlayer[player] ~= nil
 end
@@ -421,6 +620,11 @@ function MatchService.GetWaitingPlayers()
 	local players = {}
 	for _, entry in ipairs(waitingQueue) do
 		table.insert(players, entry.Player)
+	end
+	for _, arenaState in pairs(arenaStatesById) do
+		for _, entry in pairs(arenaState.QueueSlots) do
+			table.insert(players, entry.Player)
+		end
 	end
 
 	return players

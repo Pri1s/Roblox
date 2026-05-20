@@ -21,6 +21,9 @@
         "$path": "src/shared/Networking",
         "ClientReady": {
           "$className": "RemoteFunction"
+        },
+        "SetControlsEnabled": {
+          "$className": "RemoteEvent"
         }
       },
       "Assets": {
