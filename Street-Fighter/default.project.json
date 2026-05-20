@@ -4,21 +4,59 @@
     "$className": "DataModel",
 
     "ReplicatedStorage": {
-      "Shared": {
-        "$path": "src/shared"
+      "Modules": {
+        "$className": "Folder",
+        "Client": {
+          "$path": "src/shared/Modules/Client"
+        },
+        "Shared": {
+          "$path": "src/shared/Modules/Shared"
+        },
+        "Utility": {
+          "$path": "src/shared/Modules/Utility"
+        }
+      },
+      "Networking": {
+        "$className": "Folder",
+        "$path": "src/shared/Networking",
+        "ClientReady": {
+          "$className": "RemoteFunction"
+        },
+        "SetControlsEnabled": {
+          "$className": "RemoteEvent"
+        }
+      },
+      "Assets": {
+        "$className": "Folder",
+        "Models": {
+          "$path": "src/shared/Assets/Models"
+        },
+        "Effects": {
+          "$path": "src/shared/Assets/Effects"
+        },
+        "Sounds": {
+          "$path": "src/shared/Assets/Sounds"
+        },
+        "Animations": {
+          "$path": "src/shared/Assets/Animations"
+        }
       }
     },
 
     "ServerScriptService": {
-      "Server": {
-        "$path": "src/server"
+      "ServerModules": {
+        "$path": "src/server/ServerModules"
+      },
+      "loader.server.lua": {
+        "$path": "src/server/loader.server.lua"
       }
     },
 
     "StarterPlayer": {
       "StarterPlayerScripts": {
-        "Client": {
-          "$path": "src/client"
+        "$className": "StarterPlayerScripts",
+        "Starter.client.lua": {
+          "$path": "src/client/Starter.client.lua"
         }
       }
     },
