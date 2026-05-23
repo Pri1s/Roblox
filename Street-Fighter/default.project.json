@@ -9,6 +9,9 @@
         "Client": {
           "$path": "src/shared/Modules/Client"
         },
+        "Configs": {
+          "$path": "src/shared/Modules/Configs"
+        },
         "Shared": {
           "$path": "src/shared/Modules/Shared"
         },

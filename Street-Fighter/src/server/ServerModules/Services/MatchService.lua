@@ -9,18 +9,33 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
 local setFightCameraRemote = ReplicatedStorage.Networking.SetFightCamera
+local setControlsEnabledRemote = ReplicatedStorage.Networking.SetControlsEnabled
+local MatchServiceConfig = require(ReplicatedStorage.Modules.Configs.MatchServiceConfig)
 
 local STATE = {
 	Vacant = "Vacant",
 	Fight = "Fight",
 }
 
+local FIGHT_PHASE = {
+	Entrance = "Entrance",
+	Round = "Round",
+}
+
 local arenaMetadataById = {}
 local queuedSlotByPlayer = {}
 
-local MATCH_SPAWN_OFFSET = Vector3.new(0, 3, 0)
+local MATCH_SPAWN_OFFSET = MatchServiceConfig.MatchSpawnOffset
+local ENTRANCE_PHASE_DURATION_SECONDS = MatchServiceConfig.EntrancePhaseDurationSeconds
+local DEFAULT_WALK_SPEED = MatchServiceConfig.DefaultWalkSpeed
+local DEFAULT_JUMP_POWER = MatchServiceConfig.DefaultJumpPower
+local DEFAULT_JUMP_HEIGHT = MatchServiceConfig.DefaultJumpHeight
+local ORIGINAL_WALK_SPEED_ATTRIBUTE = "MatchOriginalWalkSpeed"
+local ORIGINAL_JUMP_POWER_ATTRIBUTE = "MatchOriginalJumpPower"
+local ORIGINAL_JUMP_HEIGHT_ATTRIBUTE = "MatchOriginalJumpHeight"
 
 MatchService.State = STATE
+MatchService.FightPhase = FIGHT_PHASE
 
 -- Converts an arena identifier into the metadata key. Parameters: arenaId is the identifier to normalize.
 local function getArenaKey(arenaId)
@@ -49,6 +64,16 @@ local function disableCharacterControls(character)
 		return
 	end
 
+	if humanoid:GetAttribute(ORIGINAL_WALK_SPEED_ATTRIBUTE) == nil then
+		humanoid:SetAttribute(ORIGINAL_WALK_SPEED_ATTRIBUTE, humanoid.WalkSpeed)
+	end
+	if humanoid:GetAttribute(ORIGINAL_JUMP_POWER_ATTRIBUTE) == nil then
+		humanoid:SetAttribute(ORIGINAL_JUMP_POWER_ATTRIBUTE, humanoid.JumpPower)
+	end
+	if humanoid:GetAttribute(ORIGINAL_JUMP_HEIGHT_ATTRIBUTE) == nil then
+		humanoid:SetAttribute(ORIGINAL_JUMP_HEIGHT_ATTRIBUTE, humanoid.JumpHeight)
+	end
+
 	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
 	humanoid.Jump = false
 	humanoid.JumpPower = 0
@@ -56,9 +81,29 @@ local function disableCharacterControls(character)
 	humanoid.WalkSpeed = 0
 end
 
+-- Allows a character to move and jump again. Parameters: character (Model?) is the character model to update.
+local function enableCharacterControls(character)
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then
+		return
+	end
+
+	humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+	humanoid.Jump = false
+	humanoid.WalkSpeed = humanoid:GetAttribute(ORIGINAL_WALK_SPEED_ATTRIBUTE) or DEFAULT_WALK_SPEED
+	humanoid.JumpPower = humanoid:GetAttribute(ORIGINAL_JUMP_POWER_ATTRIBUTE) or DEFAULT_JUMP_POWER
+	humanoid.JumpHeight = humanoid:GetAttribute(ORIGINAL_JUMP_HEIGHT_ATTRIBUTE) or DEFAULT_JUMP_HEIGHT
+end
+
 -- Prevents the player's current character from moving or jumping while queued. Parameters: player (Player) owns the character to update.
 local function disableQueuedCharacterControls(player)
 	disableCharacterControls(player.Character)
+end
+
+-- Allows a player's current character and local input controls to move again. Parameters: player (Player) owns the controls to enable.
+local function enablePlayerControls(player)
+	enableCharacterControls(player.Character)
+	setControlsEnabledRemote:FireClient(player, true, true)
 end
 
 -- Builds a match spawn CFrame that faces another spawn when possible. Parameters: referencePart (BasePart) defines position, facingReferencePart (BasePart?) defines the look target.
@@ -143,6 +188,70 @@ local function getSpawnReference(arenaMetadata, slotId)
 	return nil
 end
 
+-- Starts the active round phase for an entrance match. Parameters: arenaMetadata is the arena state whose current match advances into active play.
+local function startRoundPhase(arenaMetadata)
+	local currentMatch = arenaMetadata.CurrentMatch
+	if arenaMetadata.State ~= STATE.Fight or not currentMatch or currentMatch.Phase ~= FIGHT_PHASE.Entrance then
+		return false, "MatchNotInEntrance"
+	end
+
+	local playerOne = currentMatch.Fighters["1"]
+	local playerTwo = currentMatch.Fighters["2"]
+	if not isActivePlayer(playerOne) or not isActivePlayer(playerTwo) then
+		return false, "MissingFighter"
+	end
+
+	currentMatch.Phase = FIGHT_PHASE.Round
+	currentMatch.PhaseStartedAt = os.clock()
+
+	enablePlayerControls(playerOne)
+	enablePlayerControls(playerTwo)
+
+	setFightCameraRemote:FireClient(playerOne, true, arenaMetadata.ArenaId, playerOne, playerTwo, FIGHT_PHASE.Round)
+	setFightCameraRemote:FireClient(playerTwo, true, arenaMetadata.ArenaId, playerOne, playerTwo, FIGHT_PHASE.Round)
+
+	return true, "RoundStarted"
+end
+
+-- Starts the round phase after the entrance window if the same match is still active. Parameters: arenaMetadata is the arena state and expectedMatch is the match that requested the transition.
+local function scheduleRoundPhase(arenaMetadata, expectedMatch)
+	task.delay(ENTRANCE_PHASE_DURATION_SECONDS, function()
+		if arenaMetadata.CurrentMatch ~= expectedMatch then
+			return
+		end
+
+		startRoundPhase(arenaMetadata)
+	end)
+end
+
+-- Starts the entrance phase for a ready fight. Parameters: arenaMetadata is the arena state, playerOne/playerTwo are fighters, and playerOneSpawn/playerTwoSpawn are their spawn references.
+local function startEntrancePhase(arenaMetadata, playerOne, playerTwo, playerOneSpawn, playerTwoSpawn)
+	local playerOneSpawned = spawnMatchCharacter(playerOne, playerOneSpawn, playerTwoSpawn)
+	local playerTwoSpawned = spawnMatchCharacter(playerTwo, playerTwoSpawn, playerOneSpawn)
+	if not playerOneSpawned or not playerTwoSpawned then
+		return false, "MissingDefaultRig"
+	end
+
+	local startedAt = os.clock()
+	arenaMetadata.State = STATE.Fight
+	arenaMetadata.CurrentMatch = {
+		State = STATE.Fight,
+		Phase = FIGHT_PHASE.Entrance,
+		Fighters = {
+			["1"] = playerOne,
+			["2"] = playerTwo,
+		},
+		StartedAt = startedAt,
+		PhaseStartedAt = startedAt,
+	}
+
+	setFightCameraRemote:FireClient(playerOne, true, arenaMetadata.ArenaId, playerOne, playerTwo, FIGHT_PHASE.Entrance)
+	setFightCameraRemote:FireClient(playerTwo, true, arenaMetadata.ArenaId, playerOne, playerTwo, FIGHT_PHASE.Entrance)
+	scheduleRoundPhase(arenaMetadata, arenaMetadata.CurrentMatch)
+
+	return true, "MatchStarted"
+end
+
 -- Starts a fight when both queue slots are filled and no fight is active. Parameters: arenaMetadata is the arena state to inspect and update.
 local function startMatchIfReady(arenaMetadata)
 	if arenaMetadata.State ~= STATE.Vacant then
@@ -162,26 +271,7 @@ local function startMatchIfReady(arenaMetadata)
 		return false, "MissingSpawnReference"
 	end
 
-	local playerOneSpawned = spawnMatchCharacter(playerOne, playerOneSpawn, playerTwoSpawn)
-	local playerTwoSpawned = spawnMatchCharacter(playerTwo, playerTwoSpawn, playerOneSpawn)
-	if not playerOneSpawned or not playerTwoSpawned then
-		return false, "MissingDefaultRig"
-	end
-
-	arenaMetadata.State = STATE.Fight
-	arenaMetadata.CurrentMatch = {
-		State = STATE.Fight,
-		Fighters = {
-			["1"] = playerOne,
-			["2"] = playerTwo,
-		},
-		StartedAt = os.clock(),
-	}
-
-	setFightCameraRemote:FireClient(playerOne, true, arenaMetadata.ArenaId, playerOne, playerTwo)
-	setFightCameraRemote:FireClient(playerTwo, true, arenaMetadata.ArenaId, playerOne, playerTwo)
-
-	return true, "MatchStarted"
+	return startEntrancePhase(arenaMetadata, playerOne, playerTwo, playerOneSpawn, playerTwoSpawn)
 end
 
 -- Registers or updates arena metadata for queueing. Parameters: arenaId identifies the arena, arenaModel (Model) is the arena instance.
