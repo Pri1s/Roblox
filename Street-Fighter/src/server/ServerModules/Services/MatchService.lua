@@ -8,6 +8,8 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
+local setFightCameraRemote = ReplicatedStorage.Networking.SetFightCamera
+
 local STATE = {
 	Vacant = "Vacant",
 	Fight = "Fight",
@@ -159,6 +161,9 @@ local function startMatchIfReady(arenaMetadata)
 		},
 		StartedAt = os.clock(),
 	}
+
+	setFightCameraRemote:FireClient(playerOne, true, arenaMetadata.ArenaId, "1")
+	setFightCameraRemote:FireClient(playerTwo, true, arenaMetadata.ArenaId, "2")
 
 	return true, "MatchStarted"
 end

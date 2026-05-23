@@ -22,6 +22,9 @@
         "ClientReady": {
           "$className": "RemoteFunction"
         },
+        "SetFightCamera": {
+          "$className": "RemoteEvent"
+        },
         "SetControlsEnabled": {
           "$className": "RemoteEvent"
         }
