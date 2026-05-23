@@ -9,6 +9,9 @@
         "Client": {
           "$path": "src/shared/Modules/Client"
         },
+        "Configs": {
+          "$path": "src/shared/Modules/Configs"
+        },
         "Shared": {
           "$path": "src/shared/Modules/Shared"
         },
@@ -21,6 +24,9 @@
         "$path": "src/shared/Networking",
         "ClientReady": {
           "$className": "RemoteFunction"
+        },
+        "SetFightCamera": {
+          "$className": "RemoteEvent"
         },
         "SetControlsEnabled": {
           "$className": "RemoteEvent"

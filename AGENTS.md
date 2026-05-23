@@ -68,6 +68,10 @@ Before implementing, restate the goal as a verifiable outcome:
 
 If you can't define what done looks like, ask before writing code.
 
+## 5. Function Comments
+
+When writing or modifying code, agents must always include a brief comment next to each function that gives a high-level overview of what the function does and the parameters it takes.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
