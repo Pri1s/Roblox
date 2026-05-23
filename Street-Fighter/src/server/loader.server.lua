@@ -8,6 +8,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerModules = ServerScriptService.ServerModules
 local SharedModules = ReplicatedStorage.Modules.Shared
 
+-- Collects every ModuleScript descendant in the given folder. Parameters: folder (Instance) is the root to scan.
 local function collectModules(folder)
 	local modules = {}
 	for _, obj in ipairs(folder:GetDescendants()) do
@@ -18,7 +19,9 @@ local function collectModules(folder)
 	return modules
 end
 
+-- Sorts modules in-place by their Priority attribute. Parameters: modules ({ModuleScript}) is the list to sort.
 local function sortByPriority(modules)
+	-- Compares two modules by Priority for table.sort. Parameters: a and b (ModuleScript) are the modules being ordered.
 	table.sort(modules, function(a, b)
 		local pa = a:GetAttribute("Priority") or 0
 		local pb = b:GetAttribute("Priority") or 0

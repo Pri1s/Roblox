@@ -7,6 +7,7 @@ local localPlayer = Players.LocalPlayer
 local controls
 local setControlsEnabledRemote
 
+-- Enables or disables the local player's controls. Parameters: enabled (boolean) determines the requested control state.
 local function setControlsEnabled(enabled)
 	if not controls then
 		return
@@ -19,6 +20,7 @@ local function setControlsEnabled(enabled)
 	end
 end
 
+-- Captures local player controls and networking dependencies. Parameters: none.
 function ControlsService.Init()
 	local playerScripts = localPlayer:WaitForChild("PlayerScripts")
 	local playerModule = require(playerScripts:WaitForChild("PlayerModule"))
@@ -29,6 +31,7 @@ function ControlsService.Init()
 		:WaitForChild("SetControlsEnabled")
 end
 
+-- Listens for server control-toggle requests. Parameters: none.
 function ControlsService.Start()
 	setControlsEnabledRemote.OnClientEvent:Connect(setControlsEnabled)
 end
