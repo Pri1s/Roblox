@@ -18,6 +18,8 @@ local STATE = {
 local arenaMetadataById = {}
 local queuedSlotByPlayer = {}
 
+local MATCH_SPAWN_OFFSET = Vector3.new(0, 3, 0)
+
 MatchService.State = STATE
 
 -- Converts an arena identifier into the metadata key. Parameters: arenaId is the identifier to normalize.
@@ -59,8 +61,22 @@ local function disableQueuedCharacterControls(player)
 	disableCharacterControls(player.Character)
 end
 
--- Replaces a player's character with the ReplicatedStorage.Default rig at a reference part. Parameters: player (Player) receives the rig, referencePart (BasePart) defines the spawn position.
-local function spawnMatchCharacter(player, referencePart)
+-- Builds a match spawn CFrame that faces another spawn when possible. Parameters: referencePart (BasePart) defines position, facingReferencePart (BasePart?) defines the look target.
+local function getMatchSpawnCFrame(referencePart, facingReferencePart)
+	local spawnPosition = referencePart.Position + MATCH_SPAWN_OFFSET
+
+	if facingReferencePart and facingReferencePart:IsA("BasePart") then
+		local targetPosition = Vector3.new(facingReferencePart.Position.X, spawnPosition.Y, facingReferencePart.Position.Z)
+		if (targetPosition - spawnPosition).Magnitude > 0.001 then
+			return CFrame.lookAt(spawnPosition, targetPosition)
+		end
+	end
+
+	return referencePart.CFrame + MATCH_SPAWN_OFFSET
+end
+
+-- Replaces a player's character with the ReplicatedStorage.Default rig at a reference part. Parameters: player (Player) receives the rig, referencePart (BasePart) defines the spawn position, and facingReferencePart (BasePart?) defines who they face.
+local function spawnMatchCharacter(player, referencePart, facingReferencePart)
 	local defaultRig = ReplicatedStorage:FindFirstChild("Default")
 	if not defaultRig or not defaultRig:IsA("Model") then
 		warn("ReplicatedStorage.Default character rig was not found")
@@ -80,7 +96,7 @@ local function spawnMatchCharacter(player, referencePart)
 	end
 
 	matchCharacter.Name = player.Name
-	matchCharacter:PivotTo(referencePart.CFrame + Vector3.new(0, 3, 0))
+	matchCharacter:PivotTo(getMatchSpawnCFrame(referencePart, facingReferencePart))
 	disableCharacterControls(matchCharacter)
 	player.Character = matchCharacter
 	matchCharacter.Parent = Workspace
@@ -146,8 +162,8 @@ local function startMatchIfReady(arenaMetadata)
 		return false, "MissingSpawnReference"
 	end
 
-	local playerOneSpawned = spawnMatchCharacter(playerOne, playerOneSpawn)
-	local playerTwoSpawned = spawnMatchCharacter(playerTwo, playerTwoSpawn)
+	local playerOneSpawned = spawnMatchCharacter(playerOne, playerOneSpawn, playerTwoSpawn)
+	local playerTwoSpawned = spawnMatchCharacter(playerTwo, playerTwoSpawn, playerOneSpawn)
 	if not playerOneSpawned or not playerTwoSpawned then
 		return false, "MissingDefaultRig"
 	end
@@ -162,8 +178,8 @@ local function startMatchIfReady(arenaMetadata)
 		StartedAt = os.clock(),
 	}
 
-	setFightCameraRemote:FireClient(playerOne, true, arenaMetadata.ArenaId, "1")
-	setFightCameraRemote:FireClient(playerTwo, true, arenaMetadata.ArenaId, "2")
+	setFightCameraRemote:FireClient(playerOne, true, arenaMetadata.ArenaId, playerOne, playerTwo)
+	setFightCameraRemote:FireClient(playerTwo, true, arenaMetadata.ArenaId, playerOne, playerTwo)
 
 	return true, "MatchStarted"
 end

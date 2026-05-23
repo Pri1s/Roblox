@@ -1,30 +1,19 @@
 local CameraService = {}
 
 -- Public API
--- CameraService.EnableForSlot(arenaId, slotId) -> boolean
+-- CameraService.EnableEntrance(arenaId, playerOne, playerTwo) -> boolean
 -- CameraService.Disable(reason) -> nil
 
-local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 
-local localPlayer = Players.LocalPlayer
 local setFightCameraRemote
-local RunSchedulerService
 local activeCameraPart
-local initialHeightOffset = 0
 local warnedMessages = {}
 local debugSessionId = 0
-local debugUpdateCount = 0
-local debugStartedAt = 0
-local lastDebugUpdateLogAt = 0
 
-local SCHEDULER_ID = "FightCamera"
-local RENDER_PRIORITY = Enum.RenderPriority.Camera.Value
 local DEBUG_PREFIX = "[CameraService][FightCamera] "
-local INITIAL_UPDATE_LOG_COUNT = 8
-local UPDATE_LOG_INTERVAL_SECONDS = 1
-local UPDATE_LOG_DURATION_SECONDS = 8
+local CHARACTER_ROOT_WAIT_SECONDS = 2
 
 -- Prints a fight camera debug message. Parameters: message (string) is the diagnostic text to emit.
 local function debugLog(message)
@@ -49,16 +38,6 @@ local function formatInstancePath(instance)
 	return instance:GetFullName()
 end
 
--- Reports whether an update tick should be logged. Parameters: now (number) is the current os.clock value.
-local function shouldLogUpdate(now)
-	if debugUpdateCount <= INITIAL_UPDATE_LOG_COUNT then
-		return true
-	end
-
-	return now - debugStartedAt <= UPDATE_LOG_DURATION_SECONDS
-		and now - lastDebugUpdateLogAt >= UPDATE_LOG_INTERVAL_SECONDS
-end
-
 -- Warns once for a repeated camera setup issue. Parameters: key (string) deduplicates the warning and message (string) is shown.
 local function warnOnce(key, message)
 	if warnedMessages[key] then
@@ -69,9 +48,9 @@ local function warnOnce(key, message)
 	warn(DEBUG_PREFIX .. message)
 end
 
--- Gets the local character root part if it is available. Parameters: none.
-local function getCharacterRoot()
-	local character = localPlayer.Character
+-- Gets a player's character root part if it is available. Parameters: player (Player?) owns the character to inspect.
+local function getCharacterRoot(player)
+	local character = player and player.Character
 	local rootPart = character and character:FindFirstChild("HumanoidRootPart")
 
 	if rootPart and rootPart:IsA("BasePart") then
@@ -81,12 +60,27 @@ local function getCharacterRoot()
 	return nil
 end
 
--- Finds the configured camera part for an arena slot. Parameters: arenaId and slotId identify Workspace.Arenas/<arenaId>/CameraParts/<slotId>.
-local function getCameraPart(arenaId, slotId)
+-- Waits briefly for both fighter root parts to replicate. Parameters: playerOne and playerTwo are the fighters, timeoutSeconds (number) is the max wait time.
+local function waitForFighterRoots(playerOne, playerTwo, timeoutSeconds)
+	local deadline = os.clock() + timeoutSeconds
+	local playerOneRoot = getCharacterRoot(playerOne)
+	local playerTwoRoot = getCharacterRoot(playerTwo)
+
+	while (not playerOneRoot or not playerTwoRoot) and os.clock() < deadline do
+		task.wait()
+		playerOneRoot = getCharacterRoot(playerOne)
+		playerTwoRoot = getCharacterRoot(playerTwo)
+	end
+
+	return playerOneRoot, playerTwoRoot
+end
+
+-- Finds the configured entrance camera part for an arena. Parameters: arenaId identifies Workspace.Arenas/<arenaId>/CameraParts/Entrance.
+local function getEntranceCameraPart(arenaId)
 	local arenas = Workspace:FindFirstChild("Arenas")
 	local arena = arenas and arenas:FindFirstChild(tostring(arenaId))
 	local cameraParts = arena and arena:FindFirstChild("CameraParts")
-	local cameraPart = cameraParts and cameraParts:FindFirstChild(tostring(slotId))
+	local cameraPart = cameraParts and cameraParts:FindFirstChild("Entrance")
 
 	if cameraPart and cameraPart:IsA("BasePart") then
 		return cameraPart
@@ -97,19 +91,12 @@ end
 
 -- Stops the scriptable fight camera and restores Roblox's default camera mode. Parameters: reason (string?) describes why it stopped.
 function CameraService.Disable(reason)
-	local wasBound = RunSchedulerService and RunSchedulerService.IsBound(SCHEDULER_ID)
 	debugLog(
 		"Disable requested; reason="
 			.. tostring(reason or "unspecified")
-			.. ", wasBound="
-			.. tostring(wasBound)
 			.. ", activeCameraPart="
 			.. formatInstancePath(activeCameraPart)
 	)
-
-	if RunSchedulerService then
-		RunSchedulerService.Unbind(SCHEDULER_ID)
-	end
 
 	activeCameraPart = nil
 
@@ -119,141 +106,104 @@ function CameraService.Disable(reason)
 	end
 end
 
--- Updates the active camera part and applies it to CurrentCamera. Parameters: none.
-local function updateCamera()
-	local rootPart = getCharacterRoot()
+-- Applies the entrance camera part to CurrentCamera. Parameters: cameraPart (BasePart), playerOneRoot (BasePart), and playerTwoRoot (BasePart) define the static shot.
+local function applyEntranceCamera(cameraPart, playerOneRoot, playerTwoRoot)
 	local currentCamera = Workspace.CurrentCamera
-	if not rootPart or not currentCamera or not activeCameraPart or activeCameraPart.Parent == nil then
-		warnOnce(
-			"LostCameraTarget",
-			"Fight camera target was lost; rootPart="
-				.. formatInstancePath(rootPart)
-				.. ", currentCamera="
-				.. formatInstancePath(currentCamera)
-				.. ", activeCameraPart="
-				.. formatInstancePath(activeCameraPart)
-		)
-		CameraService.Disable("LostCameraTarget")
-		return
-	end
-
-	debugUpdateCount = debugUpdateCount + 1
-
-	local currentCFrame = activeCameraPart.CFrame
-	local currentRotation = currentCFrame - currentCFrame.Position
-	local newPosition = Vector3.new(
-		rootPart.Position.X,
-		rootPart.Position.Y + initialHeightOffset,
-		currentCFrame.Position.Z
-	)
-
-	activeCameraPart.CFrame = CFrame.new(newPosition) * currentRotation
-	currentCamera.CFrame = activeCameraPart.CFrame
-
-	local now = os.clock()
-	if shouldLogUpdate(now) then
-		lastDebugUpdateLogAt = now
-		debugLog(
-			"Update #"
-				.. tostring(debugUpdateCount)
-				.. "; root="
-				.. formatVector3(rootPart.Position)
-				.. ", cameraPartBefore="
-				.. formatVector3(currentCFrame.Position)
-				.. ", cameraPartAfter="
-				.. formatVector3(activeCameraPart.Position)
-				.. ", currentCamera="
-				.. formatVector3(currentCamera.CFrame.Position)
-				.. ", initialHeightOffset="
-				.. tostring(initialHeightOffset)
-		)
-	end
-end
-
--- Enables the scriptable fight camera for an arena slot. Parameters: arenaId and slotId identify the configured camera part to follow.
-function CameraService.EnableForSlot(arenaId, slotId)
-	debugSessionId = debugSessionId + 1
-	debugUpdateCount = 0
-	debugStartedAt = os.clock()
-	lastDebugUpdateLogAt = 0
-
-	debugLog(
-		"EnableForSlot start; session="
-			.. tostring(debugSessionId)
-			.. ", arenaId="
-			.. tostring(arenaId)
-			.. ", slotId="
-			.. tostring(slotId)
-			.. ", schedulerAvailable="
-			.. tostring(RunSchedulerService ~= nil)
-	)
-
-	if not RunSchedulerService then
-		warnOnce("MissingRunSchedulerService", "RunSchedulerService is missing; fight camera was not enabled")
+	if not currentCamera then
+		warnOnce("MissingCurrentCamera", "CurrentCamera is nil; entrance camera was not enabled")
 		return false
 	end
 
-	local cameraPart = getCameraPart(arenaId, slotId)
+	local currentCFrame = cameraPart.CFrame
+	local currentRotation = currentCFrame - currentCFrame.Position
+	local averageRootY = (playerOneRoot.Position.Y + playerTwoRoot.Position.Y) / 2
+	local newPosition = Vector3.new(
+		currentCFrame.Position.X,
+		averageRootY,
+		currentCFrame.Position.Z
+	)
+
+	cameraPart.CFrame = CFrame.new(newPosition) * currentRotation
+	currentCamera.CameraType = Enum.CameraType.Scriptable
+	currentCamera.CFrame = cameraPart.CFrame
+
+	debugLog(
+		"Entrance camera applied; playerOneRoot="
+			.. formatVector3(playerOneRoot.Position)
+			.. ", playerTwoRoot="
+			.. formatVector3(playerTwoRoot.Position)
+			.. ", cameraPartBefore="
+			.. formatVector3(currentCFrame.Position)
+			.. ", cameraPartAfter="
+			.. formatVector3(cameraPart.Position)
+			.. ", currentCamera="
+			.. formatVector3(currentCamera.CFrame.Position)
+	)
+
+	return true
+end
+
+-- Enables the static entrance fight camera for an arena. Parameters: arenaId identifies the arena, playerOne and playerTwo are the fighters to frame.
+function CameraService.EnableEntrance(arenaId, playerOne, playerTwo)
+	debugSessionId = debugSessionId + 1
+
+	debugLog(
+		"EnableEntrance start; session="
+			.. tostring(debugSessionId)
+			.. ", arenaId="
+			.. tostring(arenaId)
+			.. ", playerOne="
+			.. formatInstancePath(playerOne)
+			.. ", playerTwo="
+			.. formatInstancePath(playerTwo)
+	)
+
+	local cameraPart = getEntranceCameraPart(arenaId)
 	if not cameraPart then
 		warnOnce(
-			"MissingCameraPart:" .. tostring(arenaId) .. ":" .. tostring(slotId),
-			"Arena " .. tostring(arenaId) .. " camera slot " .. tostring(slotId) .. " was not found"
+			"MissingEntranceCameraPart:" .. tostring(arenaId),
+			"Arena " .. tostring(arenaId) .. " entrance camera part was not found"
 		)
 		CameraService.Disable("MissingCameraPart")
 		return false
 	end
 
-	local rootPart = getCharacterRoot()
-	if not rootPart then
-		warnOnce("MissingCharacterRoot", "Local character is missing HumanoidRootPart; fight camera was not enabled")
+	local playerOneRoot, playerTwoRoot = waitForFighterRoots(playerOne, playerTwo, CHARACTER_ROOT_WAIT_SECONDS)
+	if not playerOneRoot or not playerTwoRoot then
+		warnOnce(
+			"MissingCharacterRoot",
+			"One or both fighters are missing HumanoidRootPart after "
+				.. tostring(CHARACTER_ROOT_WAIT_SECONDS)
+				.. " seconds; fight camera was not enabled"
+		)
 		CameraService.Disable("MissingCharacterRoot")
 		return false
 	end
 
 	activeCameraPart = cameraPart
-	initialHeightOffset = cameraPart.Position.Y - rootPart.Position.Y
 	debugLog(
 		"Resolved targets; cameraPart="
 			.. formatInstancePath(cameraPart)
 			.. ", cameraPartPosition="
 			.. formatVector3(cameraPart.Position)
-			.. ", rootPart="
-			.. formatInstancePath(rootPart)
-			.. ", rootPosition="
-			.. formatVector3(rootPart.Position)
-			.. ", initialHeightOffset="
-			.. tostring(initialHeightOffset)
+			.. ", playerOneRoot="
+			.. formatInstancePath(playerOneRoot)
+			.. ", playerTwoRoot="
+			.. formatInstancePath(playerTwoRoot)
 	)
 
-	local currentCamera = Workspace.CurrentCamera
-	if currentCamera then
-		currentCamera.CameraType = Enum.CameraType.Scriptable
-		debugLog("CurrentCamera set to Scriptable; camera=" .. formatInstancePath(currentCamera))
-	else
-		debugLog("CurrentCamera is nil before binding render step")
+	if not applyEntranceCamera(cameraPart, playerOneRoot, playerTwoRoot) then
+		CameraService.Disable("ApplyEntranceCameraFailed")
+		return false
 	end
 
-	RunSchedulerService.BindRenderStep(SCHEDULER_ID, RENDER_PRIORITY, updateCamera)
-	debugLog(
-		"BindRenderStep requested; schedulerId="
-			.. SCHEDULER_ID
-			.. ", priority="
-			.. tostring(RENDER_PRIORITY)
-			.. ", isBound="
-			.. tostring(RunSchedulerService.IsBound(SCHEDULER_ID))
-	)
-
-	updateCamera()
-	debugLog("EnableForSlot complete; session=" .. tostring(debugSessionId))
+	debugLog("EnableEntrance complete; session=" .. tostring(debugSessionId))
 
 	return true
 end
 
 -- Captures replicated networking dependencies. Parameters: none.
 function CameraService.Init()
-	RunSchedulerService = _G.RunSchedulerService
-	debugLog("Init; RunSchedulerService available=" .. tostring(RunSchedulerService ~= nil))
-
 	setFightCameraRemote = ReplicatedStorage
 		:WaitForChild("Networking")
 		:WaitForChild("SetFightCamera")
@@ -264,19 +214,21 @@ end
 function CameraService.Start()
 	debugLog("Start; connecting SetFightCamera remote listener")
 
-	-- Applies a server camera assignment. Parameters: enabled (boolean), arenaId, and slotId describe the camera state.
-	setFightCameraRemote.OnClientEvent:Connect(function(enabled, arenaId, slotId)
+	-- Applies a server camera assignment. Parameters: enabled (boolean), arenaId, playerOne, and playerTwo describe the camera state.
+	setFightCameraRemote.OnClientEvent:Connect(function(enabled, arenaId, playerOne, playerTwo)
 		debugLog(
 			"SetFightCamera received; enabled="
 				.. tostring(enabled)
 				.. ", arenaId="
 				.. tostring(arenaId)
-				.. ", slotId="
-				.. tostring(slotId)
+				.. ", playerOne="
+				.. formatInstancePath(playerOne)
+				.. ", playerTwo="
+				.. formatInstancePath(playerTwo)
 		)
 
 		if enabled then
-			CameraService.EnableForSlot(arenaId, slotId)
+			CameraService.EnableEntrance(arenaId, playerOne, playerTwo)
 		else
 			CameraService.Disable("RemoteDisabled")
 		end
