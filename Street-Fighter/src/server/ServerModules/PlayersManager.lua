@@ -1,3 +1,6 @@
+-- Manages player lifecycle. Must be the last server module to load (Priority = 10).
+-- Signals the client that the server is ready via the ClientReady RemoteFunction.
+
 local PlayersManager = {}
 
 local Players = game:GetService("Players")
@@ -5,27 +8,25 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local registeredPlayers = {}
 
--- Registers setup state for a joining player. Parameters: player (Player) is the player being added.
+-- Runs per-player setup logic; guards against duplicate calls
 local function onPlayerAdded(player)
-	if registeredPlayers[player] then
-		return
-	end
+	if registeredPlayers[player] then return end
 	registeredPlayers[player] = true
 
 	-- Add per-player setup logic here
 end
 
--- Clears setup state for a leaving player. Parameters: player (Player) is the player being removed.
+-- Cleans up per-player state on departure
 local function onPlayerRemoving(player)
 	registeredPlayers[player] = nil
 
 	-- Add per-player teardown logic here
 end
 
--- Initializes player manager dependencies. Parameters: none.
-function PlayersManager.Init() end
+function PlayersManager.Init()
 
--- Connects player lifecycle handlers and enables the client-ready handshake. Parameters: none.
+end
+
 function PlayersManager.Start()
 	Players.PlayerAdded:Connect(onPlayerAdded)
 	Players.PlayerRemoving:Connect(onPlayerRemoving)
@@ -37,10 +38,7 @@ function PlayersManager.Start()
 
 	-- Signal the client that all server modules have finished loading
 	local ClientReady = ReplicatedStorage.Networking.ClientReady
-	-- Responds to client-ready handshake requests after server modules load. Parameters: none.
-	ClientReady.OnServerInvoke = function()
-		return true
-	end
+	ClientReady.OnServerInvoke = function() return true end
 end
 
 return PlayersManager
