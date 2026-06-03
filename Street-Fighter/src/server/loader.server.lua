@@ -1,14 +1,22 @@
 -- Collects all modules from ServerModules and Shared,
 -- sorts them by a Priority attribute (lower number = higher priority),
 -- calls Init on all of them first, then Start on all of them.
+-- Creates the ClientReady RemoteFunction so clients can block until this script finishes.
 
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local NetworkUtil = require(ReplicatedStorage.Modules.Utility.NetworkUtil)
+
 local ServerModules = ServerScriptService.ServerModules
 local SharedModules = ReplicatedStorage.Modules.Shared
+local Networking = ReplicatedStorage.Networking
 
--- Collects every ModuleScript descendant in the given folder. Parameters: folder (Instance) is the root to scan.
+-- Create ClientReady before loading modules so WaitForChild on the client unblocks immediately.
+-- OnServerInvoke is set after loading so InvokeServer() yields until the server is ready.
+local ClientReady = NetworkUtil.create("RemoteFunction", "ClientReady", Networking)
+
+-- Returns all ModuleScript descendants of a folder
 local function collectModules(folder)
 	local modules = {}
 	for _, obj in ipairs(folder:GetDescendants()) do
@@ -19,9 +27,8 @@ local function collectModules(folder)
 	return modules
 end
 
--- Sorts modules in-place by their Priority attribute. Parameters: modules ({ModuleScript}) is the list to sort.
+-- Sorts modules by their Priority attribute (lower = earlier)
 local function sortByPriority(modules)
-	-- Compares two modules by Priority for table.sort. Parameters: a and b (ModuleScript) are the modules being ordered.
 	table.sort(modules, function(a, b)
 		local pa = a:GetAttribute("Priority") or 0
 		local pb = b:GetAttribute("Priority") or 0
@@ -30,12 +37,8 @@ local function sortByPriority(modules)
 end
 
 local allModules = {}
-for _, m in ipairs(collectModules(ServerModules)) do
-	table.insert(allModules, m)
-end
-for _, m in ipairs(collectModules(SharedModules)) do
-	table.insert(allModules, m)
-end
+for _, m in ipairs(collectModules(ServerModules)) do table.insert(allModules, m) end
+for _, m in ipairs(collectModules(SharedModules)) do table.insert(allModules, m) end
 
 sortByPriority(allModules)
 
@@ -47,13 +50,15 @@ for _, m in ipairs(allModules) do
 end
 
 for _, mod in ipairs(loaded) do
-	if mod.Init then
-		mod.Init()
-	end
+	if mod.Init then mod.Init() end
 end
 
 for _, mod in ipairs(loaded) do
-	if mod.Start then
-		mod.Start()
-	end
+	if mod.Start then mod.Start() end
+end
+
+-- Signal clients that the server is ready. Any client that called InvokeServer()
+-- before this point was yielding; setting the handler now unblocks all of them.
+ClientReady.OnServerInvoke = function()
+	return true
 end

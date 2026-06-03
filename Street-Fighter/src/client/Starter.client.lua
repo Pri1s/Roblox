@@ -12,7 +12,7 @@ local ClientReady = ReplicatedStorage:WaitForChild("Networking"):WaitForChild("C
 -- Block until server confirms all server modules have loaded
 ClientReady:InvokeServer()
 
--- Collects every ModuleScript descendant in the given folder. Parameters: folder (Instance) is the root to scan.
+-- Returns all ModuleScript descendants of a folder
 local function collectModules(folder)
 	local modules = {}
 	for _, obj in ipairs(folder:GetDescendants()) do
@@ -23,9 +23,8 @@ local function collectModules(folder)
 	return modules
 end
 
--- Sorts modules in-place by their Priority attribute. Parameters: modules ({ModuleScript}) is the list to sort.
+-- Sorts modules by their Priority attribute (lower = earlier)
 local function sortByPriority(modules)
-	-- Compares two modules by Priority for table.sort. Parameters: a and b (ModuleScript) are the modules being ordered.
 	table.sort(modules, function(a, b)
 		local pa = a:GetAttribute("Priority") or 0
 		local pb = b:GetAttribute("Priority") or 0
@@ -34,12 +33,8 @@ local function sortByPriority(modules)
 end
 
 local allModules = {}
-for _, m in ipairs(collectModules(ClientModules)) do
-	table.insert(allModules, m)
-end
-for _, m in ipairs(collectModules(SharedModules)) do
-	table.insert(allModules, m)
-end
+for _, m in ipairs(collectModules(ClientModules)) do table.insert(allModules, m) end
+for _, m in ipairs(collectModules(SharedModules)) do table.insert(allModules, m) end
 
 sortByPriority(allModules)
 
@@ -51,13 +46,9 @@ for _, m in ipairs(allModules) do
 end
 
 for _, mod in ipairs(loaded) do
-	if mod.Init then
-		mod.Init()
-	end
+	if mod.Init then mod.Init() end
 end
 
 for _, mod in ipairs(loaded) do
-	if mod.Start then
-		mod.Start()
-	end
+	if mod.Start then mod.Start() end
 end
