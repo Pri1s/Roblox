@@ -5,8 +5,20 @@
 
 local CombatController = {}
 
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
 local InputHandler
 local AnimationService
+local combatAttackRequested
+
+local DEBUG_PREFIX = "[CombatAnimationDebug]"
+
+-- Prints a standard local combat animation debug message.
+-- message: string to send to Studio Output
+local function debugPrint(message)
+	print(DEBUG_PREFIX .. " " .. Players.LocalPlayer.Name .. ": " .. message)
+end
 
 -- All spec states. The local player is always in exactly one.
 local State = {
@@ -99,7 +111,7 @@ local function configureTrack(track, data)
 	track.Looped = data.looped == true
 end
 
--- Preloads every configured combat animation before any state transition plays.
+-- Preloads every configured combat animation for lower-latency future playback.
 local function preloadConfiguredAnimations()
 	for state, data in pairs(StateAnimationData) do
 		local track = AnimationService.Preload(state, data.animationId)
@@ -169,6 +181,15 @@ local function scheduleRecovery(attackState, delaySeconds)
 	end)
 end
 
+-- Requests server-owned hitbox activation for attacks with mapped animations.
+-- attackState: State string to send to the server
+local function requestServerAttack(attackState)
+	if combatAttackRequested then
+		debugPrint("Requesting server hitbox for " .. tostring(attackState) .. ".")
+		combatAttackRequested:FireServer(attackState)
+	end
+end
+
 -- Transitions into attackState, plays its configured local animation when present,
 -- then returns to Idle after the animation or placeholder recovery duration.
 -- attackState: a State constant with a corresponding AttackData entry
@@ -183,6 +204,8 @@ local function initiateAttack(attackState)
 		return
 	end
 
+	requestServerAttack(attackState)
+
 	AnimationService.StopAll(0.1)
 	local track = AnimationService.Load(attackState, data.animationId)
 	configureTrack(track, data)
@@ -196,11 +219,28 @@ end
 function CombatController.Init()
 	InputHandler = _G.InputHandler
 	AnimationService = _G.AnimationService
+
+	local networking = ReplicatedStorage:WaitForChild("Networking")
+	combatAttackRequested = networking:WaitForChild("CombatAttackRequested")
+	debugPrint("CombatAttackRequested remote ready.")
 end
 
 -- Registers all keybindings with InputHandler for the duration of the session.
 function CombatController.Start()
-	preloadConfiguredAnimations()
+	-- Starts combat animation playback once the local Animator is ready.
+	-- No parameters are provided by this callback.
+	AnimationService.OnReady(function()
+		debugPrint("AnimationService ready; playing combat idle before background preload.")
+		transitionTo(State.Idle)
+
+		-- Preloads remaining combat animations without blocking the first idle playback.
+		-- No parameters are provided by task.spawn.
+		task.spawn(function()
+			debugPrint("Starting background combat animation preload.")
+			preloadConfiguredAnimations()
+			debugPrint("Finished background combat animation preload.")
+		end)
+	end)
 
 	-- Crouch / Down modifier (spec transitions 3 & 4)
 	InputHandler.RegisterKeyDown(Keys.Down, function()
@@ -242,7 +282,6 @@ function CombatController.Start()
 		end)
 	end
 
-	transitionTo(State.Idle)
 end
 
 return CombatController

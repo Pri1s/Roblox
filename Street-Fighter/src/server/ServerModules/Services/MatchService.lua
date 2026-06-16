@@ -24,6 +24,7 @@ local ARENA_TEMPLATE_NAME = "SakuraPaths"
 local SPAWN_Y_OFFSET = 4
 local DEBUG_PREFIX = "[MatchDebug]"
 local MATCH_CAMERA_REMOTE_NAME = "MatchCameraStateChanged"
+local MATCH_CAMERA_STATE_REMOTE_NAME = "GetMatchCameraState"
 
 local slots = {
 	[PLAYER_ONE] = nil,
@@ -45,6 +46,7 @@ local characterConnections = {}
 local healthConnections = {}
 local activeArena = nil
 local matchCameraStateChanged = nil
+local getMatchCameraState = nil
 local isMatchCameraActive = false
 
 -- Formats a player for compact debug output.
@@ -99,6 +101,7 @@ end
 -- payload: table passed to the client CameraService
 local function fireMatchCameraState(player, payload)
 	if player and player.Parent == Players and matchCameraStateChanged then
+		debugPrint("Firing match camera state to " .. formatPlayer(player) .. ": isActive=" .. tostring(payload and payload.isActive))
 		matchCameraStateChanged:FireClient(player, payload)
 	end
 end
@@ -297,6 +300,23 @@ local function getPlayerSlot(player)
 	end
 
 	return nil
+end
+
+-- Builds the current camera payload for a fighter that may have missed the RemoteEvent.
+-- player: Player instance requesting the latest match camera state
+local function getMatchCameraPayloadFor(player)
+	if not isMatchCameraActive or not activeArena or not getPlayerSlot(player) then
+		return {
+			isActive = false,
+		}
+	end
+
+	return {
+		isActive = true,
+		player1 = slots[PLAYER_ONE],
+		player2 = slots[PLAYER_TWO],
+		arena = activeArena,
+	}
 end
 
 -- Reports whether both tracked players currently have living humanoids.
@@ -533,6 +553,16 @@ end
 -- Initializes service dependencies and creates match camera networking.
 function MatchService.Init()
 	matchCameraStateChanged = NetworkUtil.create("RemoteEvent", MATCH_CAMERA_REMOTE_NAME, ReplicatedStorage.Networking)
+	getMatchCameraState = NetworkUtil.create("RemoteFunction", MATCH_CAMERA_STATE_REMOTE_NAME, ReplicatedStorage.Networking)
+
+	-- Returns the latest match camera state for clients that connected after the one-shot event fired.
+	-- player: Player instance that invoked the RemoteFunction
+	getMatchCameraState.OnServerInvoke = function(player)
+		local payload = getMatchCameraPayloadFor(player)
+		debugPrint("Match camera state requested by " .. formatPlayer(player) .. ": isActive=" .. tostring(payload.isActive))
+		return payload
+	end
+
 	debugPrint("Init complete.")
 end
 

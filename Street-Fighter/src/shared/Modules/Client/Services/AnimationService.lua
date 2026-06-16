@@ -8,6 +8,7 @@
 -- AnimationService.Stop(name, fadeTime?)
 -- AnimationService.StopAll(fadeTime?)
 -- AnimationService.IsPlaying(name) -> boolean
+-- AnimationService.OnReady(callback)
 
 local AnimationService = {}
 
@@ -17,12 +18,21 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DEFAULT_FADE_TIME = 0.1
 local DEFAULT_ANIMATIONS = {}
+local DEBUG_PREFIX = "[AnimationDebug]"
 
 local _tracks = {}
 local _loaded = {}
 local _humanoid = nil
 local _animator = nil
 local _animationsFolder = nil
+local _isReady = false
+local _readyCallbacks = {}
+
+-- Prints a standard local animation debug message.
+-- message: string to send to Studio Output
+local function debugPrint(message)
+	print(DEBUG_PREFIX .. " " .. Players.LocalPlayer.Name .. ": " .. message)
+end
 
 -- Loads an Animation asset into the current Animator.
 -- name: string key for the cached track
@@ -76,13 +86,33 @@ local function reloadTracks()
 	end
 end
 
+-- Notifies registered consumers that the current character Animator can load tracks.
+-- character: Player character model whose Animator is ready
+local function notifyReady(character)
+	_isReady = true
+	debugPrint("Animator ready for " .. character:GetFullName() .. "; callbacks=" .. tostring(#_readyCallbacks))
+
+	for _, callback in ipairs(_readyCallbacks) do
+		-- Runs one consumer callback with the ready character.
+		-- character: Player character model whose Animator is ready
+		local didRun, callbackError = pcall(callback, character)
+		if not didRun then
+			warn("[AnimationService] Ready callback failed: " .. tostring(callbackError))
+		end
+	end
+end
+
 -- Caches the new character's animation refs and rebuilds tracks.
 -- character: Player character model containing Humanoid and Animator
 local function onCharacterAdded(character)
+	_isReady = false
+	debugPrint("Character added; waiting for Humanoid and Animator. Character=" .. character:GetFullName())
+
 	_humanoid = character:WaitForChild("Humanoid")
 	_animator = _humanoid:WaitForChild("Animator")
 
 	reloadTracks()
+	notifyReady(character)
 end
 
 -- Fetches and loads an animation by name, with an optional fallback id.
@@ -102,11 +132,16 @@ function AnimationService.Preload(name, animationId)
 	local animation = getAnimation(name, animationId)
 	if not animation then return nil end
 
+	debugPrint("Preloading animation " .. name .. ".")
+	-- Runs the blocking Roblox preload call safely for this animation asset.
+	-- No parameters are passed into the protected callback.
 	local didPreload, preloadError = pcall(function()
 		ContentProvider:PreloadAsync({ animation })
 	end)
 	if not didPreload then
 		warn("[AnimationService] Failed to preload " .. name .. ": " .. tostring(preloadError))
+	else
+		debugPrint("Finished preloading animation " .. name .. ".")
 	end
 
 	if _tracks[name] then return _tracks[name] end
@@ -153,6 +188,21 @@ function AnimationService.IsPlaying(name)
 	local track = _tracks[name]
 
 	return track ~= nil and track.IsPlaying
+end
+
+-- Registers a callback to run whenever the local character Animator is ready.
+-- callback: function called with the current character model
+function AnimationService.OnReady(callback)
+	table.insert(_readyCallbacks, callback)
+
+	if _isReady and Players.LocalPlayer.Character then
+		-- Runs the newly registered callback immediately when the Animator is already ready.
+		-- Players.LocalPlayer.Character: current character model passed to the callback
+		local didRun, callbackError = pcall(callback, Players.LocalPlayer.Character)
+		if not didRun then
+			warn("[AnimationService] Ready callback failed: " .. tostring(callbackError))
+		end
+	end
 end
 
 -- Initializes service dependencies; no _G dependencies are needed currently.

@@ -1,0 +1,10 @@
+[package]
+name = "teamswordphin/shapecasthitbox"
+description = "A shapecast-centric solution to melee hitboxes. Successor to RaycastHitbox."
+version = "0.2.9"
+license = "MIT"
+authors = ["TeamSwordphin", "colbert2677"]
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+
+[dependencies]

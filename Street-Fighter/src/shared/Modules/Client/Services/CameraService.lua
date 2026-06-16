@@ -12,19 +12,25 @@ local Workspace = game:GetService("Workspace")
 
 local SYSTEM_DEFAULT = "Default"
 local SYSTEM_COMBAT = "Combat"
+local MATCH_CAMERA_STATE_REMOTE_NAME = "GetMatchCameraState"
+local DEBUG_PREFIX = "[CameraDebug]"
 
-local MIN_CAMERA_DISTANCE = 18
-local MAX_CAMERA_DISTANCE = 42
-local DISTANCE_PER_STUD = 0.65
-local CAMERA_HEIGHT_OFFSET = 7
-local TARGET_HEIGHT_OFFSET = 3
-local TARGET_VERTICAL_CLAMP = 4
-local TRACKING_RESPONSE = 12
+local COMBAT_CONTEXT_RETRY_DELAY = 0.1
+local MAX_COMBAT_CONTEXT_ATTEMPTS = 20
 
 local RunServiceHandler
+local GameConfigs
+local CameraConfig
 
 local _combatContext = nil
 local _renderStepId = nil
+local _cameraModeToken = 0
+
+-- Prints a standard local camera debug message.
+-- message: string to send to Studio Output
+local function debugPrint(message)
+	print(DEBUG_PREFIX .. " " .. Players.LocalPlayer.Name .. ": " .. message)
+end
 
 -- Clamps value between minValue and maxValue.
 -- value: number to clamp
@@ -100,8 +106,8 @@ local function buildCombatContext(context)
 		player2 = context.player2,
 		fightAxis = fightAxis,
 		cameraSide = chooseCameraSide(fightAxis),
-		targetBaseY = averageSpawnY + TARGET_HEIGHT_OFFSET,
-		cameraY = averageSpawnY + CAMERA_HEIGHT_OFFSET,
+		targetBaseY = averageSpawnY + CameraConfig.TargetHeightOffset,
+		cameraY = averageSpawnY + CameraConfig.CameraHeightOffset,
 	}
 end
 
@@ -115,14 +121,14 @@ local function getCombatCameraCFrame(combatContext)
 	local midpoint = (root1.Position + root2.Position) / 2
 	local separation = math.abs((root2.Position - root1.Position):Dot(combatContext.fightAxis))
 	local distance = clamp(
-		MIN_CAMERA_DISTANCE + separation * DISTANCE_PER_STUD,
-		MIN_CAMERA_DISTANCE,
-		MAX_CAMERA_DISTANCE
+		CameraConfig.MinCameraDistance + separation * CameraConfig.DistancePerStud,
+		CameraConfig.MinCameraDistance,
+		CameraConfig.MaxCameraDistance
 	)
 	local targetY = clamp(
 		midpoint.Y,
-		combatContext.targetBaseY - TARGET_VERTICAL_CLAMP,
-		combatContext.targetBaseY + TARGET_VERTICAL_CLAMP
+		combatContext.targetBaseY - CameraConfig.TargetVerticalClamp,
+		combatContext.targetBaseY + CameraConfig.TargetVerticalClamp
 	)
 	local target = Vector3.new(midpoint.X, targetY, midpoint.Z)
 	local cameraPosition = Vector3.new(target.X, combatContext.cameraY, target.Z) + combatContext.cameraSide * distance
@@ -138,6 +144,9 @@ local function updateCombatCamera(deltaTime, shouldSnap)
 
 	local camera = getCurrentCamera()
 	if not camera then return end
+	if camera.CameraType ~= Enum.CameraType.Scriptable then
+		camera.CameraType = Enum.CameraType.Scriptable
+	end
 
 	local targetCFrame = getCombatCameraCFrame(_combatContext)
 	if not targetCFrame then return end
@@ -147,7 +156,7 @@ local function updateCombatCamera(deltaTime, shouldSnap)
 		return
 	end
 
-	local alpha = 1 - math.exp(-TRACKING_RESPONSE * deltaTime)
+	local alpha = 1 - math.exp(-CameraConfig.TrackingResponse * deltaTime)
 	camera.CFrame = camera.CFrame:Lerp(targetCFrame, alpha)
 end
 
@@ -167,11 +176,15 @@ end
 
 -- Restores Roblox's default local player camera behavior.
 local function transitionToDefault()
+	_cameraModeToken += 1
 	unregisterCombatStep()
 	_combatContext = nil
 
 	local camera = getCurrentCamera()
-	if not camera then return end
+	if not camera then
+		debugPrint("Default camera transition deferred because CurrentCamera is nil.")
+		return
+	end
 
 	camera.CameraType = Enum.CameraType.Custom
 
@@ -179,14 +192,36 @@ local function transitionToDefault()
 	if humanoid then
 		camera.CameraSubject = humanoid
 	end
+
+	debugPrint("Transitioned to default camera.")
 end
 
 -- Activates the combat camera using the provided match context.
 -- context: table containing player1, player2, and arena
-local function transitionToCombat(context)
+-- attempt: optional retry count while replicated arena children arrive
+-- token: optional camera mode token used to cancel stale retries
+local function transitionToCombat(context, attempt, token)
+	attempt = attempt or 1
+	if not token then
+		_cameraModeToken += 1
+		token = _cameraModeToken
+	elseif token ~= _cameraModeToken then
+		return
+	end
+
 	local combatContext = buildCombatContext(context)
 	if not combatContext then
-		warn("[CameraService] Combat camera activation ignored because match context is incomplete.")
+		if attempt < MAX_COMBAT_CONTEXT_ATTEMPTS then
+			debugPrint("Combat camera context incomplete; retrying attempt " .. tostring(attempt + 1) .. ".")
+			-- Retries combat activation after replicated arena children have more time to arrive.
+			-- No parameters are passed by task.delay beyond the closed-over context, attempt, and token.
+			task.delay(COMBAT_CONTEXT_RETRY_DELAY, function()
+				transitionToCombat(context, attempt + 1, token)
+			end)
+			return
+		end
+
+		warn("[CameraService] Combat camera activation ignored because match context is incomplete after retries.")
 		return
 	end
 
@@ -196,21 +231,43 @@ local function transitionToCombat(context)
 	local camera = getCurrentCamera()
 	if camera then
 		camera.CameraType = Enum.CameraType.Scriptable
+	else
+		debugPrint("Combat camera transition continued without CurrentCamera; RenderStepped will retry CFrame updates.")
 	end
 
 	updateCombatCamera(0, true)
 
 	_renderStepId = RunServiceHandler.Register("RenderStepped", onRenderStepped)
+	debugPrint("Transitioned to combat camera. Player1=" .. tostring(context.player1) .. ", Player2=" .. tostring(context.player2) .. ", Arena=" .. tostring(context.arena))
 end
 
 -- Handles match camera remote payloads from the server.
 -- payload: table with isActive, player1, player2, and arena fields
 local function onMatchCameraStateChanged(payload)
+	debugPrint("Received match camera event: isActive=" .. tostring(payload and payload.isActive))
 	if payload and payload.isActive then
 		CameraService.TransitionTo(SYSTEM_COMBAT, payload)
 	else
 		CameraService.TransitionTo(SYSTEM_DEFAULT)
 	end
+end
+
+-- Requests the current camera state in case the server event fired before this client connected.
+-- getMatchCameraState: RemoteFunction that returns the current match camera payload
+local function syncCurrentMatchCameraState(getMatchCameraState)
+	-- Invokes the server safely to fetch the latest camera payload.
+	-- No parameters are passed to the protected callback.
+	local didInvoke, payload = pcall(function()
+		return getMatchCameraState:InvokeServer()
+	end)
+
+	if not didInvoke then
+		warn("[CameraService] Failed to sync match camera state: " .. tostring(payload))
+		return
+	end
+
+	debugPrint("Synced match camera state: isActive=" .. tostring(payload and payload.isActive))
+	onMatchCameraStateChanged(payload)
 end
 
 -- Transitions to a named camera system.
@@ -229,14 +286,19 @@ end
 -- Captures client service dependencies from _G after all modules are required.
 function CameraService.Init()
 	RunServiceHandler = _G.RunServiceHandler
+	GameConfigs = _G.GameConfigs
+	CameraConfig = GameConfigs.Camera
 end
 
 -- Listens for server-authoritative match camera state changes.
 function CameraService.Start()
 	local networking = ReplicatedStorage:WaitForChild("Networking")
 	local matchCameraStateChanged = networking:WaitForChild("MatchCameraStateChanged")
+	local getMatchCameraState = networking:WaitForChild(MATCH_CAMERA_STATE_REMOTE_NAME)
 
 	matchCameraStateChanged.OnClientEvent:Connect(onMatchCameraStateChanged)
+	debugPrint("Connected match camera listener; syncing current state.")
+	syncCurrentMatchCameraState(getMatchCameraState)
 end
 
 return CameraService
